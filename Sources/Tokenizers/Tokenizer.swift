@@ -879,6 +879,62 @@ public extension AutoTokenizer {
         return Config(dictionary)
     }
 
+    private static func tokenizerData(
+        from configuration: LanguageModelConfigurationFromHub
+    ) async throws -> Config {
+        let tokenizerData = try await configuration.tokenizerData
+        guard
+            try await configuration.modelType == "deepseekocr",
+            tokenizerData.preTokenizer.type.string() == "Metaspace",
+            tokenizerData.model.type.string() == "BPE",
+            tokenizerData.model.vocab["Ġ"].integer() != nil,
+            tokenizerData.model.vocab["▁"].integer() == nil
+        else {
+            return tokenizerData
+        }
+
+        var dictionary = tokenizerData.dictionary(or: [:])
+        dictionary["pre_tokenizer"] = [
+            "type": "Sequence",
+            "pretokenizers": [
+                [
+                    "type": "Split",
+                    "pattern": ["Regex": "\\p{N}{1,3}"],
+                    "behavior": "Isolated",
+                    "invert": false,
+                ],
+                [
+                    "type": "Split",
+                    "pattern": ["Regex": "[一-龥぀-ゟ゠-ヿ]+"],
+                    "behavior": "Isolated",
+                    "invert": false,
+                ],
+                [
+                    "type": "Split",
+                    "pattern": [
+                        "Regex":
+                            ##"[!"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~][A-Za-z]+|[^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+| ?[\p{P}\p{S}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"##
+                    ],
+                    "behavior": "Isolated",
+                    "invert": false,
+                ],
+                [
+                    "type": "ByteLevel",
+                    "add_prefix_space": false,
+                    "trim_offsets": true,
+                    "use_regex": false,
+                ],
+            ],
+        ]
+        dictionary["decoder"] = [
+            "type": "ByteLevel",
+            "add_prefix_space": true,
+            "trim_offsets": true,
+            "use_regex": true,
+        ]
+        return Config(dictionary)
+    }
+
     /// Determines the appropriate tokenizer class for the given configuration.
     ///
     /// - Parameter tokenizerConfig: The tokenizer configuration
@@ -943,7 +999,7 @@ public extension AutoTokenizer {
     ) async throws -> Tokenizer {
         let config = LanguageModelConfigurationFromHub(modelName: model, revision: revision, hubApi: hubApi)
         let tokenizerConfig = try await tokenizerConfig(from: config)
-        let tokenizerData = try await config.tokenizerData
+        let tokenizerData = try await tokenizerData(from: config)
 
         return try AutoTokenizer.from(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, strict: strict)
     }
@@ -963,7 +1019,7 @@ public extension AutoTokenizer {
     ) async throws -> Tokenizer {
         let config = LanguageModelConfigurationFromHub(modelFolder: modelFolder, hubApi: hubApi)
         let tokenizerConfig = try await tokenizerConfig(from: config)
-        let tokenizerData = try await config.tokenizerData
+        let tokenizerData = try await tokenizerData(from: config)
 
         return try AutoTokenizer.from(tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData, strict: strict)
     }

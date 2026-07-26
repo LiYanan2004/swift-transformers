@@ -80,6 +80,24 @@ struct FactoryTests {
             #expect(tokenizer.encode(text: "<bos>", addSpecialTokens: false) == [0])
         }
     }
+
+    @Test
+    func repairsDeepseekOCRByteLevelTokenizerPipeline() async throws {
+        let modelFolder = try makeModelFolder(
+            modelType: "deepseekocr",
+            malformedByteLevelPipeline: true
+        )
+        defer { try? FileManager.default.removeItem(at: modelFolder) }
+
+        let tokenizer = try await AutoTokenizer.from(modelFolder: modelFolder)
+        let tokens = tokenizer.tokenize(text: "document parsing. ")
+
+        #expect(tokens.allSatisfy { tokenizer.convertTokenToId($0) != nil })
+        #expect(
+            tokenizer.encode(text: "document parsing. ", addSpecialTokens: false)
+                == tokens.compactMap(tokenizer.convertTokenToId)
+        )
+    }
 }
 
 private enum IncorrectHubTokenizerClassModel: String, CaseIterable {
@@ -87,7 +105,10 @@ private enum IncorrectHubTokenizerClassModel: String, CaseIterable {
     case deepSeekOCR2 = "deepseek_ocr2"
 }
 
-private func makeModelFolder(modelType: String) throws -> URL {
+private func makeModelFolder(
+    modelType: String,
+    malformedByteLevelPipeline: Bool = false
+) throws -> URL {
     let modelFolder = FileManager.default.temporaryDirectory.appendingPathComponent(
         "swift-transformers-tokenizer-test-\(UUID().uuidString)",
         isDirectory: true
@@ -120,10 +141,26 @@ private func makeModelFolder(modelType: String) throws -> URL {
     else {
         throw CocoaError(.fileNoSuchFile)
     }
-    try FileManager.default.copyItem(
-        at: tokenizerURL,
-        to: modelFolder.appendingPathComponent("tokenizer.json")
-    )
+    let destinationURL = modelFolder.appendingPathComponent("tokenizer.json")
+    if malformedByteLevelPipeline {
+        let data = try Data(contentsOf: tokenizerURL)
+        var tokenizerData = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        tokenizerData["pre_tokenizer"] = [
+            "type": "Metaspace",
+            "replacement": "▁",
+            "prepend_scheme": "always",
+            "split": false,
+        ]
+        tokenizerData["decoder"] = [
+            "type": "Sequence",
+            "decoders": [],
+        ]
+        try JSONSerialization.data(withJSONObject: tokenizerData).write(to: destinationURL)
+    } else {
+        try FileManager.default.copyItem(at: tokenizerURL, to: destinationURL)
+    }
 
     return modelFolder
 }
