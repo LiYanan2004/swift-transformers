@@ -66,4 +66,64 @@ struct FactoryTests {
         let inputIds = tokenizer("Today she took a train to the West")
         #expect(inputIds == [50258, 50363, 27676, 750, 1890, 257, 3847, 281, 264, 4055, 50257])
     }
+
+    @Test
+    func modelsWithIncorrectHubTokenizerClassUseTokenizersBackend() async throws {
+        for modelType in IncorrectHubTokenizerClassModel.allCases {
+            let modelFolder = try makeModelFolder(modelType: modelType.rawValue)
+            defer { try? FileManager.default.removeItem(at: modelFolder) }
+
+            let tokenizer = try await AutoTokenizer.from(modelFolder: modelFolder)
+
+            #expect(tokenizer is PreTrainedTokenizer)
+            #expect(!(tokenizer is LlamaPreTrainedTokenizer))
+            #expect(tokenizer.encode(text: "<bos>", addSpecialTokens: false) == [0])
+        }
+    }
+}
+
+private enum IncorrectHubTokenizerClassModel: String, CaseIterable {
+    case deepSeekOCR = "deepseek_ocr"
+    case deepSeekOCR2 = "deepseek_ocr2"
+}
+
+private func makeModelFolder(modelType: String) throws -> URL {
+    let modelFolder = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "swift-transformers-tokenizer-test-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(
+        at: modelFolder,
+        withIntermediateDirectories: true
+    )
+
+    try Data(#"{"model_type":"\#(modelType)"}"#.utf8).write(
+        to: modelFolder.appendingPathComponent("config.json")
+    )
+    try Data(
+        #"""
+        {
+          "tokenizer_class": "LlamaTokenizerFast",
+          "bos_token": "<bos>",
+          "eos_token": "<eos>",
+          "unk_token": "<unk>",
+          "pad_token": "<pad>"
+        }
+        """#.utf8
+    ).write(to: modelFolder.appendingPathComponent("tokenizer_config.json"))
+
+    guard
+        let tokenizerURL = Bundle.module.url(
+            forResource: "tokenizer",
+            withExtension: "json"
+        )
+    else {
+        throw CocoaError(.fileNoSuchFile)
+    }
+    try FileManager.default.copyItem(
+        at: tokenizerURL,
+        to: modelFolder.appendingPathComponent("tokenizer.json")
+    )
+
+    return modelFolder
 }
